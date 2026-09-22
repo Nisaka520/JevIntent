@@ -239,7 +239,19 @@ config.example.properties   配置模板 → 复制成 config.properties 再填 
 设置.properties             首次长按自动生成（选项面板，本地文件不入库）
 docs/详细文档.md            全部实跑数据、关系对照、bsh 踩坑记录
 test/                       本地离线测试（不用手机就能跑完整流程）
+tools/package_release.py    打 Release 安装包：一条命令 → dist/JevIntent-v<版本>.zip
 ```
+
+## 打包发版
+
+```bash
+python tools/package_release.py     # 先跑密钥自检，不干净直接中止
+```
+
+产物 `dist/JevIntent-v1.8.0.zip`（约 27 KB）：`main.java` / `info.prop` /
+`config.example.properties` / `README.md` / `LICENSE` —— 就是"拷到手机插件目录就能用"的那几个文件，
+然后把 zip 拖到 GitHub Release 的 **assets** 里即可。
+（GitHub 每个 Release 自动生成的 `Source code (zip)` 是**整仓源码**，跟这个安装包不是一回事。）
 
 ## 本地测试（不用手机）
 

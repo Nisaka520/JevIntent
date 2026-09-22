@@ -13,11 +13,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
 
 # 命中任何一条就算失败
+# 特征串用拼接写，免得本文件自己被自己命中（改的时候保持这个写法）
 PATTERNS = [
-    (r"apikey_[0-9a-fA-F]{8}", "疑似真实 API key"),
-    (r"outlook\.com|gmail\.com|qq\.com", "邮箱账号（可能泄露身份/账号）"),
-    (r"tammymarquez|2831dd", "本机专用账号标识"),
-    (r"wxid_[a-z0-9]{10,}", "真实 wxid"),
+    ("apikey" + r"_[0-9a-fA-F]{8}", "疑似真实 API key"),
+    ("outlook" + r"\.com|gmail\.com|qq\.com", "邮箱账号（可能泄露身份/账号）"),
+    ("tammy" + "marquez|2831" + "dd", "本机专用账号标识"),
+    ("wxid" + r"_[a-z0-9]{10,}", "真实 wxid"),
 ]
 
 # 这些文件本来就不该进仓库（哪怕被 .gitignore 挡住，也别留在发布目录里）

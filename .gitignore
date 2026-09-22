@@ -4,6 +4,9 @@ config.properties
 presets.properties
 *.log
 
+# 打包产物（每个 Release 单独上传，不入库）
+dist/
+
 # 本地测试产物（bsh jar 请自行下载，不分发）
 *.jar
 main.test.bsh
