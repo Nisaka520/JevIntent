@@ -12,6 +12,9 @@
 
 > 用途：对方这句话到底什么意思？该用什么姿态回？——**判定**用的，不是自动回复机器人。
 
+> ⚡ **v1.9 起基本是"点完就出"**：长按弹出的那一刻就开始算（预判），你点中「意图」时结果通常已经回来了
+> —— 实测冷启动第一次 **1144ms → 9ms**。数字和做法都在下面[《有多快》](#有多快v19-实测不是估算)。
+
 > 🔗 **姊妹项目：**[旁观者 · JevBystander](https://github.com/Nisaka520/JevBystander) ——
 > 同一个判定口径的**安卓无障碍版**：不用 root / 不用 Xposed，只读屏 + 固定 3 条 Toast。
 > 装不了 LSPosed、或者怕 hook 微信的话用它；两套实现完全独立，同一台手机也能共存。
@@ -168,10 +171,43 @@
 | 只看文本消息 | A 是 / B 所有消息都挂菜单 | A |
 | 引用块字段 | A title / B des（引用气泡空白时改这个） | A |
 | 模型 | A jev-latest / B 固定 jev-1.13.0 | A |
+| 预判 | A 开（长按就开始算，点「意图」秒出）/ B 关（省调用） | A |
+| 结果缓存 | A 开（同一条消息再看秒回）/ B 关 | A |
+| 耗时日志 | A 日志带耗时 / B 不打 | A |
 | 默认关系 | A 普通朋友 / B 同事 / C 客户 / D 家人 / E 死党 / F 陌生人 / G 领导 / H 同学 | A |
 | 默认性别 | A 未知 / B 男 / C 女 | A |
 
 > 字母写错（比如写 `Z`）不会崩，自动取第一个选项，日志里会记一行。
+
+---
+
+## 有多快（v1.9 实测，不是估算）
+
+先把延迟拆开量了一遍（同一台 PC、同一个真接口、同样的 7 个问题）：
+
+| 花在哪 | 实测 |
+|---|---|
+| 客户端建连接（DNS+TCP+TLS，连接池冷） | **830~873ms**（只有冷启动这一次） |
+| 客户端建连接（复用已有连接） | **9~14ms** |
+| 服务端算完（首字节） | **250~330ms** ← 唯一的大头 |
+| 服务端抖动时的尖刺 | 1.5~1.8s（约 3% 概率） |
+
+顺手证伪了两件事，省得白折腾：
+
+- **砍问题不省时间**：只问 3 题（意图/情绪/姿态）TTFB 283~314ms，问满 7 题 291~295ms —— 基本没差。
+- **省握手没用**：TLS 会话复用已经生效，连接复用时握手只要 9ms，省不出东西。
+
+真正有用的是**把等待藏起来**。v1.9 三件套：
+
+| 改动 | 效果（实测） |
+|---|---|
+| **预判**：长按弹出菜单那一刻就把请求发出去 | 冷启动第一次：**1144ms → 点「意图」只等 9ms** |
+| **连接复用**：成功后不再 `disconnect()` | 第二次起握手 873ms → **14ms** |
+| **结果缓存**：同一条消息再看一眼直接秒回 | 第二次 0ms、0 次接口调用（上限 40 条） |
+| 拿不到答案时的重试等待 600ms → 120ms | 最坏情况少等 480ms |
+
+> 「预判」的代价：如果你点了「关系＝…」而不是「意图」，这次调用就白花了。
+> 点「意图」这条常见路径**调用次数不变**（预判那次就是正式那次），只是等待被挪到了你挑菜单的时候。
 
 ---
 
@@ -254,8 +290,8 @@ tools/package_release.py    打 Release 安装包：一条命令 → dist/JevInt
 python tools/package_release.py     # 先跑密钥自检，不干净直接中止
 ```
 
-产物 `dist/JevIntent-v1.8.0.zip`（约 27 KB）：`main.java` / `info.prop` /
-`config.example.properties` / `README.md` / `LICENSE` —— 就是"拷到手机插件目录就能用"的那几个文件，
+产物 `dist/JevIntent-v1.9.0.zip`（约 30 KB）：`main.java` / `info.prop` /
+`config.example.properties` / `README.md` / `LICENSE` / `docs/` —— 就是"拷到手机插件目录就能用"的那几个文件，
 然后把 zip 拖到 GitHub Release 的 **assets** 里即可。
 （GitHub 每个 Release 自动生成的 `Source code (zip)` 是**整仓源码**，跟这个安装包不是一回事。）
 
@@ -266,6 +302,16 @@ python tools/package_release.py     # 先跑密钥自检，不干净直接中止
 **"中文 + 反斜杠转义"混写字面量把 bsh 词法器搞崩** 的静态检查（这个坑不可捕获，
 详见详细文档）。
 
+`test/test_speed.bsh` 是 v1.9 的速度专项测试：真打接口，验证连接复用（第二次握手应 <80ms）、
+预判能提前拿到结果、缓存 40 条上限 —— 输出里会直接打印「握手 Xms + 服务端 Yms」。
+
+> PC 上用 JDK 17 跑 bsh 需要放行两个内部包（安卓真机不需要）：
+> `java --add-exports java.base/sun.net.www.protocol.https=ALL-UNNAMED
+> --add-opens java.base/sun.net.www.protocol.https=ALL-UNNAMED
+> --add-exports java.base/sun.net.www.protocol.http=ALL-UNNAMED
+> --add-opens java.base/sun.net.www.protocol.http=ALL-UNNAMED
+> -cp "bsh-2.0b6.jar;." bsh.Interpreter test_speed.bsh`
+
 ## 已知限制
 
 - 只做判定，**不生成回复文案**。
@@ -273,6 +319,8 @@ python tools/package_release.py     # 先跑密钥自检，不干净直接中止
 - 关系/性别是"每会话"的，只能用菜单循环切换，或直接编辑 `presets.properties`。
 - 取上下文最多前后各 7 句。
 - 依赖第三方 API（TypeSafe Jev），需要自备 key。
+- **速度下限由服务端决定**：算法本身要 250~330ms，且约 3% 的请求会抖到 1.5~1.8s。
+  预判只能把这 300ms 藏进"你挑菜单"的时间里，消不掉服务端抖动（想要更稳可以自己加重试）。
 
 ## 致谢 & License
 

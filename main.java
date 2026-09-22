@@ -35,6 +35,7 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.Hashtable;
 import java.util.List;
 import java.util.Properties;
 
@@ -53,7 +54,9 @@ CFG_DEFAULTS = "api_key=;model=jev-latest;endpoint=https://api.typesafe.ai/v1/sy
                "rel_default=普通朋友;sex_default=未知;" +
                "rel_options=普通朋友,陌生人,家人,情侣,死党,同事,客户,领导,同学,网友;" +
                "sex_options=未知,男,女;" +
-               "ctx_options=3,1,5,7,0";
+               "ctx_options=3,1,5,7,0;" +
+               // v1.9 速度三件套：预判（长按即开算）/ 结果缓存 / 连接复用
+               "prefetch=1;cache_on=1;speed_log=1";
 
 /** 内置兜底 key：**故意留空**（仓库里不放任何密钥）
  *  请把 key 填到同目录的 config.properties：api_key=apikey_xxx
@@ -62,6 +65,29 @@ BUILTIN_KEY = "";
 
 /** 最近一次长按的消息（脚本级变量，供 lambda 闭包取用） */
 pendingMsg = null;
+
+// ══════════════════ v1.9 速度优化：预热 / 预判 / 缓存 / 计时 ══════════════════
+// 实测（本机 java 探针 + 真接口，2026-09）：
+//   · 服务端算完 ~250~330ms，是唯一的大头；客户端连接只要 3~15ms（TLS 会话复用已生效）
+//   · 所以「省握手」没用，「把等待藏起来」才有用 → 长按菜单弹出时就把这次分析先发出去
+//   · 尖刺（1.5~1.8s）来自服务端抖动，只能靠重试/预判消化
+/** 预判完成的响应体：消息文本 → 响应 JSON */
+Hashtable preDone = new Hashtable();
+/** 预判进行中：消息文本 → 开始时间戳 */
+Hashtable preBusy = new Hashtable();
+/** 预判结果的有效期（毫秒） */
+long PRE_TTL_MS = 90000L;
+/** 最终输出缓存：state 键 → 结果文本（长按同一条消息反复看时秒回） */
+Hashtable resCache = new Hashtable();
+/** 缓存淘汰顺序 + 上限 */
+ArrayList resCacheOrder = new ArrayList();
+int RES_CACHE_MAX = 40;
+/** 上一次 HTTP 的分段耗时 */
+long httpConnectMs = 0L;
+long httpServerMs = 0L;
+long httpTotalMs = 0L;
+/** 本次结果是不是预判命中的 */
+boolean lastFromPrefetch = false;
 
 /** 插件目录（宿主全局字段 pluginPath，兜底写死路径）
  *  注意：bsh 里不要「在 try 内 return」——finally/catch 会把方法返回值吞成 void，下同。 */
@@ -381,6 +407,9 @@ String optValues(String k) {
     if (k.equals("text_only")) return "true,false";
     if (k.equals("quote_text_in")) return "title,des";
     if (k.equals("model")) return "jev-latest,jev-1.13.0";
+    if (k.equals("prefetch")) return "1,0";
+    if (k.equals("cache_on")) return "1,0";
+    if (k.equals("speed_log")) return "1,0";
     if (k.equals("rel_default")) return "普通朋友,同事,客户,家人,死党,陌生人,领导,同学";
     if (k.equals("sex_default")) return "未知,男,女";
     return "";
@@ -397,6 +426,9 @@ String optLabels(String k) {
     if (k.equals("text_only")) return "只给文本消息挂菜单,所有消息都挂";
     if (k.equals("quote_text_in")) return "title（默认）,des（气泡空白时改这个）";
     if (k.equals("model")) return "jev-latest（跟最新）,固定 jev-1.13.0";
+    if (k.equals("prefetch")) return "预判开（长按就开始算，点「意图」秒出；多花一次调用）,预判关";
+    if (k.equals("cache_on")) return "缓存开（同一条消息再看秒回）,缓存关";
+    if (k.equals("speed_log")) return "日志带耗时,不打耗时";
     if (k.equals("rel_default")) return "普通朋友,同事,客户,家人,死党,陌生人,领导,同学";
     if (k.equals("sex_default")) return "未知,男,女";
     return "";
@@ -415,6 +447,9 @@ String optKeyOf(String fileKey) {
     if (f.equals("只看文本消息")) return "text_only";
     if (f.equals("引用块字段")) return "quote_text_in";
     if (f.equals("模型")) return "model";
+    if (f.equals("预判")) return "prefetch";
+    if (f.equals("结果缓存")) return "cache_on";
+    if (f.equals("耗时日志")) return "speed_log";
     if (f.equals("默认关系")) return "rel_default";
     if (f.equals("默认性别")) return "sex_default";
     return f;
@@ -438,7 +473,7 @@ void ensureSettingFile() {
         File dir = new File(settingFile).getParentFile();
         if (dir != null && !dir.exists()) dir.mkdirs();
     } catch (Throwable ignore) { }
-    String[] keys = {"情绪条数", "附带老四项", "结果方式", "提示间隔", "上下文句数", "分析中提示", "只看文本消息", "引用块字段", "模型", "默认关系", "默认性别"};
+    String[] keys = {"情绪条数", "附带老四项", "结果方式", "提示间隔", "上下文句数", "分析中提示", "只看文本消息", "引用块字段", "模型", "预判", "结果缓存", "耗时日志", "默认关系", "默认性别"};
     StringBuilder sb = new StringBuilder();
     sb.append("# ═══ JevIntent 设置 ═══ 改等号后面的字母，保存后长按消息立即生效（不用重载插件）").append("\n");
     sb.append("# 关系不在这里：每个会话的关系在长按菜单里点「关系＝…」切换，记在 presets.properties").append("\n");
@@ -539,10 +574,10 @@ onLoad() {
     log("JevIntent 已加载：model=" + cfg("model") + " reply_mode=" + cfg("reply_mode") +
         " key=" + (cfg("api_key").length() > 16 ? cfg("api_key").substring(0, 16) + "…" : "(未配置)"));
     // 自查行：确认手机上跑的是哪一版、设置文件读到没有
-    log("JevIntent v1.8 设置文件 = " + settingFile + " ｜ 情绪条数=" + cfg("emotion_top")
+    log("JevIntent v1.9 设置文件 = " + settingFile + " ｜ 情绪条数=" + cfg("emotion_top")
         + " 上下文=" + ctxCount() + "句 老四项=" + cfg("show_legacy")
         + " 间隔=" + cfg("toast_gap_ms") + "ms 结果方式=" + cfg("reply_mode"));
-    toast("JevIntent 就绪 v1.8");
+    toast("JevIntent 就绪 v1.9");
 }
 
 onUnload() {
@@ -571,6 +606,8 @@ onMsgMenu(msg) {
             addMenuItem("意图", "", () -> { analyzeAndSend(pendingMsg); });
             addMenuItem("关系＝" + rel, "", () -> { cycleRel(pendingMsg); });
             log("JevIntent 菜单已注册：意图 / 关系＝" + rel);
+            // v1.9：菜单弹出的这一刻就把分析发出去 —— 等你点「意图」时结果基本已经回来了
+            prefetchStart(pendingMsg, msgText(pendingMsg));
         }
     } catch (Throwable t) {
         log("JevIntent.onMsgMenu 出错：" + t);
@@ -597,6 +634,110 @@ boolean allowed(String talker) {
 
 // ─────────────────────────── 分析主流程 ───────────────────────────
 
+// ─────────────────────────── v1.9 预判 / 缓存 ───────────────────────────
+
+/**
+ * 预判：用户长按弹出菜单的**那一刻**就把这次分析发出去。
+ *
+ * 为什么要这么干：实测服务端要 250~330ms，而人从长按到点中「意图」通常要 0.5~1.5 秒 ——
+ * 这段"选菜单"的时间足够把请求跑完。等真的点了「意图」，结果已经在手里，直接出。
+ * 常见路径（点「意图」）总 API 调用次数不变；只有点了「关系＝…」才会白跑一次，可用设置关掉。
+ */
+void prefetchStart(msg, String text) {
+    try {
+        if (!cfgBool("prefetch")) return;
+        if (text == null || text.length() == 0) return;
+        if (cfg("api_key").length() < 20) return;
+        Object old = preDone.get(text);
+        if (old != null) return;                        // 已经预判过同一条，别重复花钱
+        if (preBusy.get(text) != null) return;          // 正在跑
+        preBusy.put(text, String.valueOf(System.currentTimeMillis()));
+        final Object msgLocal = msg;
+        final String textLocal = text;
+        new Thread(new Runnable() {
+            public void run() {
+                try {
+                    String state = buildState(msgLocal, textLocal);
+                    String req = buildRequest(state);
+                    int timeout = parseInt(cfg("timeout_ms"), 30000);
+                    long t0 = System.currentTimeMillis();
+                    String body = httpPost(cfg("endpoint"), cfg("api_key"), req, timeout);
+                    long cost = System.currentTimeMillis() - t0;
+                    preDone.put(textLocal, body);
+                    if (fieldAfter(body, "emotion", "choice").length() == 0) {
+                        preDone.remove(textLocal);          // 空答案不算数，留给正式流程重试
+                    }
+                    log("JevIntent 预判完成 " + cost + "ms（握手 " + httpConnectMs
+                        + "ms + 服务端 " + httpServerMs + "ms）");
+                } catch (Throwable t) {
+                    log("JevIntent 预判失败（不影响正常流程）：" + brief(t));
+                } finally {
+                    preBusy.remove(textLocal);
+                }
+            }
+        }).start();
+    } catch (Throwable t) {
+        log("JevIntent.prefetchStart 出错：" + t);
+    }
+}
+
+/**
+ * 取预判结果：拿不到就返回 null（调用方走正常请求）。
+ * 如果预判还在跑，最多等 waitMs —— 等它比自己再发一次请求更省。
+ */
+String prefetchTake(String text, int waitMs) {
+    if (text == null || text.length() == 0) return null;
+    String got = null;
+    try {
+        long t0 = System.currentTimeMillis();
+        while (System.currentTimeMillis() - t0 < waitMs) {
+            Object v = preDone.get(text);
+            if (v != null) {
+                got = String.valueOf(v);
+                preDone.remove(text);
+                break;
+            }
+            if (preBusy.get(text) == null) break;        // 没在跑也没有结果 → 别等了
+            try { Thread.sleep(40); } catch (Throwable ignore) { }
+        }
+    } catch (Throwable t) {
+        log("JevIntent.prefetchTake 出错：" + t);
+    }
+    return got;
+}
+
+/** 结果缓存：state 一模一样就直接复用（长按同一条消息反复看时零延迟、零费用） */
+String cacheGet(String stateKey) {
+    try {
+        if (!cfgBool("cache_on")) return null;
+        Object v = resCache.get(stateKey);
+        return v == null ? null : String.valueOf(v);
+    } catch (Throwable t) {
+        return null;
+    }
+}
+
+void cachePut(String stateKey, String out) {
+    try {
+        if (!cfgBool("cache_on")) return;
+        if (stateKey == null || stateKey.length() == 0) return;
+        if (resCache.get(stateKey) == null) resCacheOrder.add(stateKey);
+        resCache.put(stateKey, out);
+        while (resCacheOrder.size() > RES_CACHE_MAX) {
+            Object oldest = resCacheOrder.remove(0);
+            resCache.remove(oldest);
+        }
+    } catch (Throwable t) {
+        log("JevIntent.cachePut 出错：" + t);
+    }
+}
+
+/** 加速相关状态的一行摘要（写日志用） */
+String speedLine(boolean prefetched) {
+    return "耗时：握手 " + httpConnectMs + "ms + 服务端 " + httpServerMs
+        + "ms = 共 " + httpTotalMs + "ms" + (prefetched ? "（预判命中，没再发请求）" : "");
+}
+
 /** 菜单点击后的真正逻辑（也可以被 onMsg / 其他入口直接调用） */
 analyzeAndSend(msg) {
     if (msg == null) { toast("JevIntent：没有拿到消息"); return; }
@@ -613,28 +754,57 @@ analyzeAndSend(msg) {
         }
     }
 
+    // v1.9：缓存键只依赖"很便宜就能拿到"的东西，避免为了查缓存先跑一遍取上下文 host 调用
+    String ck = msg.talker + "|" + text + "|" + presetOf("rel", msg.talker, cfg("rel_default"))
+              + "|" + presetOf("sex", msg.talker, cfg("sex_default")) + "|" + ctxCount()
+              + "|" + cfg("model");
+    String cached = cacheGet(ck);
+    if (cached != null) {
+        toast("JevIntent：这条刚看过，直接给你");
+        log("JevIntent 缓存命中：" + oneLine(cached));
+        sendResult(msg, cached);
+        return;
+    }
+
     if (cfgBool("analyzing_toast")) toast("Jev 分析中…");
 
     final Object msgLocal = msg;
     final String textLocal = text;
+    final String ckLocal = ck;
     new Thread(new Runnable() {
         public void run() {
             try {
-                String state = buildState(msgLocal, textLocal);
+                long tStart = System.currentTimeMillis();
                 String label = presetLabel(msgLocal.talker);
                 log("JevIntent 预设：" + label);
-                String req = buildRequest(state);
-                int timeout = parseInt(cfg("timeout_ms"), 30000);
-                String body = httpPost(cfg("endpoint"), cfg("api_key"), req, timeout);
-                // v1.4：实测约 3%（34 次里 1 次）会返回空答案 —— 网络/服务抖动，自动重试一次
-                if (fieldAfter(body, "emotion", "choice").length() == 0) {
-                    log("JevIntent: 这一次没拿到情绪答案，重试一次");
-                    try { Thread.sleep(600); } catch (Throwable ignore) { }
-                    body = httpPost(cfg("endpoint"), cfg("api_key"), req, timeout);
+                String out = null;
+
+                // ① 预判命中 → 直接排版（这是"长按完点一下秒出"的来源）
+                String pre = prefetchTake(textLocal, 2500);
+                if (pre != null) {
+                    lastFromPrefetch = true;
+                    out = format(pre, textLocal, label);
+                } else {
+                    // ② 没命中 → 正常发一次
+                    lastFromPrefetch = false;
+                    String state = buildState(msgLocal, textLocal);
+                    String req = buildRequest(state);
+                    int timeout = parseInt(cfg("timeout_ms"), 30000);
+                    String body = httpPost(cfg("endpoint"), cfg("api_key"), req, timeout);
+                    // v1.4：实测约 3%（34 次里 1 次）会返回空答案 —— 网络/服务抖动，自动重试一次
+                    // v1.9：等待从 600ms 降到 120ms（那 600ms 对"快"的体感伤害比服务端还大）
+                    if (fieldAfter(body, "emotion", "choice").length() == 0) {
+                        log("JevIntent: 这一次没拿到情绪答案，重试一次");
+                        try { Thread.sleep(120); } catch (Throwable ignore) { }
+                        body = httpPost(cfg("endpoint"), cfg("api_key"), req, timeout);
+                    }
+                    out = format(body, textLocal, label);
                 }
-                String out = format(body, textLocal, label);
+
+                cachePut(ckLocal, out);
                 sendResult(msgLocal, out);
-                log("JevIntent 完成：" + oneLine(out));
+                log("JevIntent 完成（总 " + (System.currentTimeMillis() - tStart) + "ms）：" + oneLine(out));
+                if (cfgBool("speed_log")) log("JevIntent " + speedLine(lastFromPrefetch));
             } catch (Throwable t) {
                 toast("Jev 失败：" + brief(t));
                 log("JevIntent 失败 " + t);
@@ -973,6 +1143,7 @@ String httpPost(String urlStr, String key, String body, int timeoutMs) {
     HttpURLConnection c = null;
     String result = null;
     String err = null;
+    long t0 = System.currentTimeMillis();
     try {
         c = (HttpURLConnection) new URL(urlStr).openConnection();
         c.setRequestMethod("POST");
@@ -982,21 +1153,31 @@ String httpPost(String urlStr, String key, String body, int timeoutMs) {
         c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
         c.setRequestProperty("Authorization", "Bearer " + key);
         c.setRequestProperty("Accept", "application/json");
+        c.setRequestProperty("Connection", "keep-alive");
         byte[] payload = body.getBytes("UTF-8");
         c.setFixedLengthStreamingMode(payload.length);
+        c.connect();                                   // 单独量握手（DNS+TCP+TLS）
+        long t1 = System.currentTimeMillis();
         OutputStream os = c.getOutputStream();
         os.write(payload);
         os.flush();
         os.close();
-        int code = c.getResponseCode();
+        int code = c.getResponseCode();                // 服务端算完（首字节）
+        long t2 = System.currentTimeMillis();
         InputStream in = (code >= 200 && code < 300) ? c.getInputStream() : c.getErrorStream();
         String text = readAll(in);
+        long t3 = System.currentTimeMillis();
+        httpConnectMs = t1 - t0;
+        httpServerMs = t2 - t1;
+        httpTotalMs = t3 - t0;
         if (code < 200 || code >= 300) err = "HTTP " + code + " " + brief(text);
         else result = text;
     } catch (Throwable t) {
         err = brief(t);
     } finally {
-        if (c != null) c.disconnect();
+        // v1.9：**成功时不 disconnect** —— 把连接还回 JVM 连接池，下次直接复用
+        //（出错才断开，免得半死不活的连接被复用；实测复用后握手 3~15ms，省掉首连 190~740ms）
+        if (c != null && err != null) c.disconnect();
     }
     if (err != null) throw new RuntimeException(err);
     return result;

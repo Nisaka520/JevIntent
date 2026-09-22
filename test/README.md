@@ -35,6 +35,21 @@ java -cp "bsh-2.0b6.jar;." bsh.Interpreter test_settings.bsh
 
 # 4) 引用消息 / 菜单回归
 java -cp "bsh-2.0b6.jar;." bsh.Interpreter test_quote.bsh
+
+# 5) v1.9 速度专项（真调接口；输出「握手 Xms + 服务端 Yms」）
+java -cp "bsh-2.0b6.jar;." bsh.Interpreter test_speed.bsh
+```
+
+> **PC 上用 JDK 17 跑**要放行两个内部包，否则 bsh 反射调不到 `HttpsURLConnectionImpl`
+> （`IllegalAccessException ... does not export sun.net.www.protocol.https`）。
+> 安卓真机没有模块系统，不需要加：
+
+```powershell
+java --add-exports java.base/sun.net.www.protocol.https=ALL-UNNAMED `
+     --add-opens  java.base/sun.net.www.protocol.https=ALL-UNNAMED `
+     --add-exports java.base/sun.net.www.protocol.http=ALL-UNNAMED `
+     --add-opens  java.base/sun.net.www.protocol.http=ALL-UNNAMED `
+     -cp "bsh-2.0b6.jar;." bsh.Interpreter test_speed.bsh
 ```
 
 Windows 上中文输出要加编码参数（否则日志是乱码）：
@@ -52,6 +67,7 @@ $env:JAVA_TOOL_OPTIONS='-Dfile.encoding=UTF-8'
 | `lex_audit.py` | 扫 `../main.java` 里"中文 + 反斜杠转义"混写的字面量，**目标 0 处** |
 | `test_settings.bsh` | 设置文件生成 / A-B-C 生效 / 写错字母兜底 / 菜单项 / 关系循环 |
 | `test_quote.bsh` | 引用消息能长按、图片不给菜单等回归 |
+| `test_speed.bsh` | v1.9 速度专项：连接复用（第二次握手应 <80ms）、预判提前取回、缓存 40 条上限 |
 | `FakeMsg.java` | 假消息对象（普通文本） |
 | `FakeMsgQuote.java` | 假消息对象（带引用块） |
 

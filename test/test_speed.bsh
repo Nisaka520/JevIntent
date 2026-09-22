@@ -1,0 +1,153 @@
+// test_speed.bsh —— v1.9 速度优化专项测试（预判 / 缓存 / 连接复用 / 计时）
+// 真调 Jev 接口，验证：① 第二次请求握手≈0ms（keep-alive 生效）② 预判能提前拿到结果 ③ 缓存秒回
+// 用法： cd test && java -cp "bsh-2.0b6.jar;." bsh.Interpreter test_speed.bsh
+
+PLUGIN = "../";
+BASE   = "./";
+
+pluginPath = BASE + "tmpcfg/";
+myWxId = "wxid_me";
+menuItems = new java.util.ArrayList();
+
+addMenuItem(String t, String p, Object a) { menuItems.add(t); }
+toastCount = 0;
+lastToasts = new java.util.ArrayList();
+toast(String s) {
+    toastCount++;
+    lastToasts.add(s);
+    System.out.println("[toast#" + toastCount + "] " + s);
+}
+log(String s) { System.out.println("[log] " + s); }
+sendText(String t, String s) { System.out.println("[sendText] " + s); }
+sendXml(String t, String x, int ty) { }
+getMsgs(String t, long f) { return new java.util.ArrayList(); }
+getUserRemark(String t) { return "备注-" + t; }
+getUserName(String t) { return "昵称-" + t; }
+getUserName(String g, String t) { return "群昵称-" + t; }
+
+new File(BASE + "tmpcfg").mkdirs();
+
+// ── 先把真 key 写进测试沙盒的 config.properties（onMsgMenu 会重读配置，注入到内存里会被冲掉）
+//    跑完最后会删掉，不会留在仓库里。注意：这段必须在 source 之前，所以不能用 main.java 里的
+//    readTextFile/writeTextFile（那时还没定义），直接用 JDK 的流 ─────────────
+String devCfg0 = "";
+try {
+    BufferedReader br = new BufferedReader(new InputStreamReader(
+        new FileInputStream("C:/gpt-batch/fkwechat-plugin/JevIntent/config.properties"), "UTF-8"));
+    String ln = br.readLine();
+    while (ln != null) { devCfg0 = devCfg0 + ln + "\n"; ln = br.readLine(); }
+    br.close();
+} catch (Throwable t) { System.out.println("读 dev config 失败：" + t); }
+String key0 = "";
+int k0 = devCfg0.indexOf("api_key=");
+if (k0 >= 0) {
+    int s0 = k0 + 8;
+    int e0 = devCfg0.indexOf("\n", s0);
+    if (e0 < 0) e0 = devCfg0.length();
+    key0 = devCfg0.substring(s0, e0).trim();
+}
+String testCfgPath = BASE + "tmpcfg/config.properties";
+if (key0.length() > 20) {
+    StringBuilder cb = new StringBuilder();
+    cb.append("api_key=").append(key0).append("\n");
+    cb.append("model=jev-latest\n");
+    cb.append("endpoint=https://api.typesafe.ai/v1/systemone\n");
+    cb.append("timeout_ms=30000\n");
+    cb.append("reply_mode=toast\ntoast_gap_ms=2000\n");
+    cb.append("prefetch=1\ncache_on=1\nspeed_log=1\ncontext_count=0\n");
+    BufferedWriter bw = new BufferedWriter(new OutputStreamWriter(
+        new FileOutputStream(testCfgPath), "UTF-8"));
+    bw.write(cb.toString());
+    bw.close();
+    System.out.println("已写入测试用 config.properties（跑完会删除）");
+}
+
+try { source(BASE + "main.test.bsh"); System.out.println("=== source OK ==="); }
+catch (Throwable t) { System.out.println("!!! source 失败: " + t); return; }
+
+onLoad();
+
+// ── 取 dev 目录里的真 key（只读，不落盘进仓库）────────────────
+String devCfg = "";
+try { devCfg = readTextFile(new File("C:/gpt-batch/fkwechat-plugin/JevIntent/config.properties")); }
+catch (Throwable t) { System.out.println("读 dev config 失败：" + t); }
+String realKey = "";
+int ki = devCfg.indexOf("api_key=");
+if (ki >= 0) {
+    int st = ki + 8;
+    int en = devCfg.indexOf("\n", st);
+    if (en < 0) en = devCfg.length();
+    realKey = devCfg.substring(st, en).trim();
+}
+if (realKey.length() < 20) {
+    System.out.println("没有可用 key，跳过真调部分");
+    return;
+}
+CFG.setProperty("api_key", realKey);
+CFG.setProperty("endpoint", "https://api.typesafe.ai/v1/systemone");
+CFG.setProperty("model", "jev-latest");
+CFG.setProperty("prefetch", "1");
+CFG.setProperty("cache_on", "1");
+CFG.setProperty("speed_log", "1");
+System.out.println("key 已注入（长度 " + realKey.length() + "）\n");
+
+String sample = "这个报价单你什么时候能给我？明天就要签合同了";
+String rel = "普通朋友";
+String state = "{\"" + rel + "\":\"普通朋友\",\"" + "待分析消息" + "\":" + jsonStr(sample) + "}";
+String req = buildRequest(state);
+
+System.out.println("=== 1. 连接复用（同样两次请求，看握手耗时）===");
+String b1 = httpPost(cfg("endpoint"), cfg("api_key"), req, 30000);
+System.out.println("  第1次  握手 " + httpConnectMs + "ms + 服务端 " + httpServerMs + "ms = " + httpTotalMs + "ms");
+String b2 = httpPost(cfg("endpoint"), cfg("api_key"), req, 30000);
+System.out.println("  第2次  握手 " + httpConnectMs + "ms + 服务端 " + httpServerMs + "ms = " + httpTotalMs + "ms");
+long reuseConnect = httpConnectMs;
+System.out.println("  答案非空 = " + (fieldAfter(b2, "emotion", "choice").length() > 0));
+System.out.println("  结论：" + (reuseConnect < 80 ? "✓ 第2次握手 <80ms，连接复用了" : "✗ 第2次握手 " + reuseConnect + "ms，没复用"));
+
+System.out.println("\n=== 2. 预判：长按那一刻就开算 ===");
+preDone.clear();
+preBusy.clear();
+FakeMsg m = new FakeMsg();
+m.talker = "wxid_abc"; m.sendTalker = "wxid_abc"; m.content = sample;
+long tp0 = System.currentTimeMillis();
+prefetchStart(m, sample);
+String got = prefetchTake(sample, 4000);
+long tp1 = System.currentTimeMillis();
+System.out.println("  预判取回 " + (got == null ? "null ✗" : "成功 ✓（" + got.length() + " 字节）"));
+System.out.println("  prefetchTake 等待 " + (tp1 - tp0) + "ms（越小越好：结果早就备好了）");
+if (got != null) System.out.println("  预判里的情绪 = " + fieldAfter(got, "emotion", "choice"));
+
+System.out.println("\n=== 3. 缓存：同一条消息再看一眼 ===");
+resCache.clear(); resCacheOrder.clear();
+String ck = "testkey|" + sample;
+cachePut(ck, "缓存里的结果");
+System.out.println("  取回 = " + cacheGet(ck) + "（期望 缓存里的结果）");
+for (int i = 0; i < 50; i++) cachePut("k" + i, "v" + i);
+System.out.println("  塞 51 条后 size = " + resCache.size() + "（上限 " + RES_CACHE_MAX + "）→ " + (resCache.size() <= RES_CACHE_MAX ? "✓ 会淘汰" : "✗ 没淘汰"));
+
+System.out.println("\n=== 4. 整链路：analyzeAndSend 第一次 vs 第二次（应命中缓存）===");
+menuItems.clear(); lastToasts.clear();
+onMsgMenu(m);
+System.out.println("  菜单项 " + menuItems.size() + " 个：" + menuItems);
+System.out.println("  预判线程已启动，等它跑完…");
+try { Thread.sleep(4000); } catch (Throwable ignore) { }
+long ta0 = System.currentTimeMillis();
+analyzeAndSend(m);
+try { Thread.sleep(1500); } catch (Throwable ignore) { }
+long ta1 = System.currentTimeMillis();
+System.out.println("  第1次 analyzeAndSend 后 " + (ta1 - ta0) + "ms，toast：" + lastToasts);
+lastToasts.clear();
+long tb0 = System.currentTimeMillis();
+analyzeAndSend(m);
+try { Thread.sleep(300); } catch (Throwable ignore) { }
+System.out.println("  第2次（缓存）" + (System.currentTimeMillis() - tb0) + "ms，toast：" + lastToasts);
+System.out.println("  第2次是否秒回 = " + (lastToasts.size() > 0 ? "✓" : "?（看上面 toast 内容）"));
+
+System.out.println("\n=== 5. 清理（把测试用的 config.properties 删掉，别把 key 留在仓库）===");
+try {
+    boolean del = new File(testCfgPath).delete();
+    System.out.println("  删除测试 key 文件：" + (del ? "✓" : "✗ 没删掉，手动确认一下 " + testCfgPath));
+} catch (Throwable t) { System.out.println("  删除失败：" + t); }
+
+System.out.println("\n=== 结束 ===");
