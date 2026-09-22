@@ -36,7 +36,7 @@
    /storage/emulated/0/Android/media/com.tencent.mm/FkWeChat/Plugin/JevIntent/
    ```
 
-3. 填你自己的 TypeSafe/Jev key，**两种方式任选**：
+3. 填你自己的 TypeSafe/Jev key（**没有 key？看 [`docs/如何获取API密钥.md`](docs/如何获取API密钥.md)，免费，1 分钟**）。两种填法任选：
 
    - **改 `config.properties`**：把 `config.example.properties` 复制成 `config.properties`（同一目录），写 `api_key=apikey_你的key`
    - **不改文件**：等插件第一次长按生成了 `设置.properties`，直接在最上面的 **【1】接口密钥** 后面写 `apikey_你的key`
@@ -220,7 +220,7 @@
 | 现象 | 原因 / 处理 |
 |---|---|
 | 长按没有「意图」 | 插件没加载（看 Toast）、或设置里「只看文本消息=A」而这条是图片/语音。引用回复的文本消息是支持的 |
-| 提示「未配置 Jev key」 | 两个地方都没填 key：`config.properties` 的 `api_key`，或 `设置.properties` 的【1】接口密钥。注意文件名别写成 `config.example.properties` |
+| 提示「未配置 Jev key」 | 先按 [`docs/如何获取API密钥.md`](docs/如何获取API密钥.md) 申请一把。两个地方都没填 key：`config.properties` 的 `api_key`，或 `设置.properties` 的【1】接口密钥。注意文件名别写成 `config.example.properties` |
 | 连点几次都没反应 | 网络或 API 超时；`timeout_ms` 默认 30s，结果会出现在宿主日志里 |
 | 弹出被系统截断 | 缩短内容：`情绪条数` 改成 A、`附带老四项` 改成 B |
 | 引用气泡是空白的 | 设置里「引用块字段」改成 **B. des**（某些宿主版本不渲染 `title`） |
@@ -237,6 +237,7 @@ main.java                   插件本体（单文件，拷进插件目录的就�
 info.prop                   插件元信息（名称/作者/版本）
 config.example.properties   配置模板 → 复制成 config.properties 再填 key
 设置.properties             首次长按自动生成（选项面板，本地文件不入库）
+docs/如何获取API密钥.md      ⭐ 没有 key 先看这个：官网注册 → 建 key → 填进插件
 docs/详细文档.md            全部实跑数据、关系对照、bsh 踩坑记录
 test/                       本地离线测试（不用手机就能跑完整流程）
 tools/package_release.py    打 Release 安装包：一条命令 → dist/JevIntent-v<版本>.zip

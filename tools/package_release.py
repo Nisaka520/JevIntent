@@ -4,8 +4,8 @@
 用法：python tools/package_release.py
 产物：dist/JevIntent-v<版本>.zip  ← 拖到 GitHub Release 的 assets 里
 
-包含：main.java / info.prop / config.example.properties / README.md / LICENSE
-（就是"拷到手机插件目录就能用"的那几个文件，不含任何密钥、不含测试与文档目录）
+包含：插件本体 + 配置模板 + README + LICENSE + docs/（含"如何获取 API Key"指南）
+就是"解压后拷到手机插件目录就能用"的那几个文件；不含任何密钥、不含测试目录
 """
 import hashlib
 import io
@@ -22,7 +22,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, ".."))
 DIST = os.path.join(ROOT, "dist")
 
-FILES = ["main.java", "info.prop", "config.example.properties", "README.md", "LICENSE"]
+FILES = ["main.java", "info.prop", "config.example.properties", "README.md", "LICENSE",
+         "docs/如何获取API密钥.md", "docs/详细文档.md"]
 
 # ── 1) 先跑密钥自检，不干净就不打包 ──
 chk = subprocess.run([sys.executable, os.path.join(HERE, "..", "test", "check_secrets.py")],
@@ -51,12 +52,16 @@ for f in FILES:
     if not os.path.exists(src):
         print(f"  ⚠ 缺少 {f}，跳过")
         continue
-    shutil.copyfile(src, os.path.join(staging, f))
+    dst = os.path.join(staging, f)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    shutil.copyfile(src, dst)
     print(f"  + {f}")
 
 with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
-    for f in sorted(os.listdir(staging)):
-        z.write(os.path.join(staging, f), f"{name}/{f}")
+    for dirpath, _dirs, filenames in os.walk(staging):          # 递归，docs/ 也要进包
+        for fn in sorted(filenames):
+            full = os.path.join(dirpath, fn)
+            z.write(full, f"{name}/{os.path.relpath(full, staging).replace(os.sep, '/')}")
 shutil.rmtree(os.path.join(DIST, "_staging"))
 
 # ── 4) 回读校验：内容 + 不含密钥 ──
