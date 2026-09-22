@@ -1,0 +1,19 @@
+# 真实配置与运行时生成的文件（绝不要提交）
+config.properties
+设置.properties
+presets.properties
+*.log
+
+# 本地测试产物（bsh jar 请自行下载，不分发）
+*.jar
+main.test.bsh
+FakeMsg.class
+FakeMsgQuote.class
+tmpcfg/
+__pycache__/
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+.DS_Store

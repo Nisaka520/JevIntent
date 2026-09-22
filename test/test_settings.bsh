@@ -1,0 +1,115 @@
+// test_settings.bsh —— v1.6「设置.properties + ABC 选项」离线测试
+// ── 路径设置（唯一需要改的地方）────────────────────────────
+// PLUGIN = main.java 所在目录；BASE = 本测试目录（放 bsh jar / main.test.bsh / FakeMsg.class）
+PLUGIN = "../";       // main.java 所在目录（相对本测试目录）
+BASE   = "./";      // 本测试目录（放 bsh jar / main.test.bsh / FakeMsg.class）
+// ── 要不要真调 Jev API（需要 config.properties 里的 key + 联网）──
+RUN_LIVE = false;
+// 覆盖：文件生成 / 默认值 / 改字母生效 / 写错字母兜底 / 菜单项 / 关系循环
+
+pluginPath = BASE + "tmpcfg/";
+myWxId = "wxid_me";
+menuItems = new java.util.ArrayList();
+
+addMenuItem(String t, String p, Object a) { menuItems.add(t); }
+toastCount = 0;
+toast(String s) { toastCount++; System.out.println("[toast#" + toastCount + "] " + s); }
+log(String s) { System.out.println("[log] " + s); }
+sendText(String t, String s) { System.out.println("[sendText → " + t + "] " + s); }
+sendXml(String t, String x, int ty) { }
+getMsgs(String t, long f) { return new java.util.ArrayList(); }
+getUserRemark(String t) { return "备注-" + t; }
+getUserName(String t) { return "昵称-" + t; }
+getUserName(String g, String t) { return "群昵称-" + t; }
+
+new File(BASE + "tmpcfg").mkdirs();       // 测试沙盒：设置文件与预设都写在这里
+try { source(BASE + "main.test.bsh"); System.out.println("=== source OK ==="); }
+catch (Throwable t) { System.out.println("!!! source 失败: " + t); return; }
+
+onLoad();
+
+System.out.println("\n=== 1. 设置文件是否自动生成 ===");
+System.out.println("路径 = " + settingFile);
+System.out.println("存在 = " + new File(settingFile).exists());
+System.out.println("\n---- 生成内容 ----");
+System.out.println(readTextFile(new File(settingFile)));
+System.out.println("---- 内容结束 ----");
+
+System.out.println("\n=== 2. 默认值（应全部等于生成文件里写的字母）===");
+System.out.println("  情绪条数   = " + cfg("emotion_top") + "   期望 3");
+System.out.println("  附带老四项 = " + cfg("show_legacy") + "   期望 true");
+System.out.println("  上下文     = " + ctxCount() + "   期望 3");
+System.out.println("  结果方式   = " + cfg("reply_mode") + "   期望 toast");
+System.out.println("  提示间隔   = " + cfg("toast_gap_ms") + "   期望 2000");
+System.out.println("  只看文本   = " + cfg("text_only") + "   期望 true");
+System.out.println("  默认关系   = " + cfg("rel_default") + "   期望 普通朋友");
+System.out.println("  默认性别   = " + cfg("sex_default") + "   期望 未知");
+
+System.out.println("\n=== 3. 改字母 → 重新长按 → 是否生效 ===");
+String txt = readTextFile(new File(settingFile));
+txt = txt.replace("情绪条数=B", "情绪条数=C");
+txt = txt.replace("附带老四项=A", "附带老四项=B");
+txt = txt.replace("上下文句数=B", "上下文句数=C");
+txt = txt.replace("结果方式=A", "结果方式=B");
+txt = txt.replace("提示间隔=A", "提示间隔=B");
+txt = txt.replace("默认关系=A", "默认关系=C");
+txt = txt.replace("模型=A", "模型=B");
+writeTextFile(settingFile, txt);
+FakeMsg m = new FakeMsg();
+m.talker = "wxid_abc"; m.sendTalker = "wxid_abc"; m.content = "在吗";
+onMsgMenu(m);
+System.out.println("  情绪条数   = " + cfg("emotion_top") + "   期望 5");
+System.out.println("  附带老四项 = " + cfg("show_legacy") + "   期望 false");
+System.out.println("  上下文     = " + ctxCount() + "   期望 5");
+System.out.println("  结果方式   = " + cfg("reply_mode") + "   期望 quote");
+System.out.println("  提示间隔   = " + cfg("toast_gap_ms") + "   期望 1200");
+System.out.println("  默认关系   = " + cfg("rel_default") + "   期望 客户");
+System.out.println("  模型       = " + cfg("model") + "   期望 jev-1.13.0");
+
+System.out.println("\n=== 3.5 密钥可以直接填在 设置.properties 里 ===");
+String sf = readTextFile(new File(settingFile));
+writeTextFile(settingFile, sf.replace("接口密钥=", "接口密钥=apikey_TEST_KEY_0123456789abcdef"));
+onMsgMenu(m);
+System.out.println("  填了文件里的 key → " + (cfg("api_key").startsWith("apikey_TEST_KEY") ? "✓ 生效（以文件为准）" : "✗ 没生效：" + cfg("api_key")));
+writeTextFile(settingFile, sf.replace("接口密钥=", "接口密钥=abc"));
+onMsgMenu(m);
+System.out.println("  只填 abc（太短）→ " + (cfg("api_key").startsWith("apikey_TEST_KEY") ? "✗ 竟然认了" : "✓ 忽略，回落到 config.properties（长度 " + cfg("api_key").length() + "）"));
+writeTextFile(settingFile, sf);
+onMsgMenu(m);
+System.out.println("  清空后 → " + (cfg("api_key").length() > 20 ? "✓ 回落到 config.properties（长度 " + cfg("api_key").length() + "）" : "⚠ 两边都没 key（长度 " + cfg("api_key").length() + "，没放 config.properties 时正常）"));
+
+System.out.println("\n=== 4. 写错字母的兜底（应取第一个值，不崩）===");
+txt = readTextFile(new File(settingFile)).replace("情绪条数=C", "情绪条数=Z");
+writeTextFile(settingFile, txt);
+onMsgMenu(m);
+System.out.println("  情绪条数 = " + cfg("emotion_top") + "   期望 1");
+
+System.out.println("\n=== 5. 菜单项 + 关系循环 ===");
+menuItems.clear();
+onMsgMenu(m);
+System.out.println("菜单项数 = " + menuItems.size() + "   期望 2");
+for (int i = 0; i < menuItems.size(); i++) System.out.println("  [" + i + "] " + menuItems.get(i));
+System.out.println("  当前关系   = " + presetOf("rel", "wxid_abc", cfg("rel_default")));
+cycleRel(m);
+System.out.println("  点一下后   = " + presetOf("rel", "wxid_abc", cfg("rel_default")));
+cycleRel(m);
+System.out.println("  再点一下   = " + presetOf("rel", "wxid_abc", cfg("rel_default")));
+
+if (RUN_LIVE) {
+System.out.println("\n=== 6. 真调一次：验证 Toast 固定 3 条（意图+3情绪 / 着急 / 建议）===");
+txt = readTextFile(new File(settingFile));
+txt = txt.replace("情绪条数=Z", "情绪条数=B");       // 3 条情绪
+txt = txt.replace("附带老四项=A", "附带老四项=B");   // 老四项不显示
+txt = txt.replace("结果方式=B", "结果方式=A");       // 回到只弹提示（才走固定三条）
+writeTextFile(settingFile, txt);
+onMsgMenu(m);
+Thread.sleep(300);
+toastCount = 0;
+analyzeAndSend(m);
+Thread.sleep(14000);
+System.out.println(">>> 本次共弹 toast " + toastCount + " 条（期望 3）");
+System.out.println(">>> 输出方式 = " + cfg("reply_mode") + "（toast 才会走固定三条）");
+
+}
+
+System.out.println("\n=== 结束 ===");

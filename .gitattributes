@@ -1,0 +1,3 @@
+# 统一行尾：仓库里存 LF，检出的也是 LF
+# （插件跑在 Android 上，Linux 行尾最稳；也避免 Windows 的 autocrlf 反复改写整个文件）
+* text=auto eol=lf

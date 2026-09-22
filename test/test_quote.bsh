@@ -1,0 +1,74 @@
+// test_quote.bsh —— 专测 v1.3 两个修复：①引用消息能长按 ②结论变多（真调 Jev）
+// ── 路径设置（唯一需要改的地方）────────────────────────────
+// PLUGIN = main.java 所在目录；BASE = 本测试目录（放 bsh jar / main.test.bsh / FakeMsg.class）
+PLUGIN = "../";       // main.java 所在目录（相对本测试目录）
+BASE   = "./";      // 本测试目录（放 bsh jar / main.test.bsh / FakeMsg.class）
+// ── 要不要真调 Jev API（需要 config.properties 里的 key + 联网）──
+RUN_LIVE = false;
+
+// ── 宿主全局字段 ──
+pluginPath = PLUGIN;
+myWxId = "wxid_me";
+hostVerCode = 2600;
+hostVerName = "8.0.x";
+
+// ── 宿主 API 桩 ──
+menuCount = 0;
+addMenuItem(String title, String path, Object action) {
+    menuCount++;
+    System.out.println("[host] 菜单项: " + title);
+}
+toast(String s) { System.out.println("[host.toast] " + s); }
+log(String s) { System.out.println("[host.log] " + s); }
+sendText(String talker, String text) {
+    System.out.println("[host.sendText -> " + talker + "]");
+    System.out.println(text);
+}
+sendXml(String talker, String xml, int type) {
+    System.out.println("[host.sendXml -> " + talker + " type=" + type + "]");
+    System.out.println(xml);
+}
+getUserRemark(String talker) { return "备注-" + talker; }
+getUserName(String groupId, String talker) { return "群昵称-" + talker; }
+getUserName(String talker) { return "昵称-" + talker; }
+getMsgs(String talker, long from) {
+    java.util.List l = new java.util.ArrayList();
+    return l;
+}
+
+System.out.println("=== 加载 main.test.bsh ===");
+try {
+    source(BASE + "main.test.bsh");
+    System.out.println("=== source OK ===");
+} catch (Throwable t) {
+    System.out.println("!!! source 失败: " + t);
+    return;
+}
+try { onLoad(); } catch (Throwable t) { System.out.println("!!! onLoad 失败: " + t); }
+
+// ── 用例 1：引用消息（老版本这里菜单数=0）──
+System.out.println("\n=== 用例1：引用回复消息（isText()=false, type=49）===");
+FakeMsgQuote q = new FakeMsgQuote();
+System.out.println("isText()      = " + q.isText());
+System.out.println("isTextMsg(msg)= " + isTextMsg(q) + "   ← true 才能长按");
+System.out.println("msgText()     = " + msgText(q) + "   ← 应该只有正文，没有 XML 标签");
+System.out.println("quotedText()  = " + quotedText(q) + "   ← 应该抽出被引用的原文");
+menuCount = 0;
+try { onMsgMenu(q); } catch (Throwable t) { System.out.println("!!! onMsgMenu 失败: " + t); }
+System.out.println("菜单项数      = " + menuCount + "   ← 2 = 修好了（v1.5 起设置集成成 ⚙ 设置 一项）/ 0 = 仍然不能长按");
+System.out.println("buildState()  = " + buildState(q, msgText(q)));
+
+// ── 用例 2：图片消息不应挂菜单（防误伤）──
+System.out.println("\n=== 用例2：图片消息（应仍然不挂菜单）===");
+FakeMsgQuote img = new FakeMsgQuote();
+img.content = "<msg><img aeskey=\"abc\" cdnmidimgurl=\"http://x/y\" length=\"12345\" /></msg>";
+System.out.println("msgText(img)  = '" + msgText(img) + "'   ← 应该是空");
+menuCount = 0;
+onMsgMenu(img);
+System.out.println("菜单项数      = " + menuCount + "   ← 0 = 正确（图片不给菜单）");
+
+// ── 用例 3：真调 Jev，看新格式的结论条数 ──
+System.out.println("\n=== 用例3：真调 Jev（引用消息）→ 看结论变多 ===");
+try { analyzeAndSend(q); } catch (Throwable t) { System.out.println("!!! 失败: " + t); }
+Thread.sleep(25000);
+System.out.println("=== 结束 ===");
